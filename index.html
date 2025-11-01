@@ -176,7 +176,8 @@
       3. PDF.js: The PDF rendering library
     -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/turn.js@4.1.0/turn.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/turn.js/3/turn.min.js"></script>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 
     <script>
@@ -237,9 +238,17 @@
 
                 // 3. Calculate responsive book dimensions
                 // Use viewport dimensions to calculate max size
-                const viewportRect = flipbookViewport.getBoundingClientRect();
-                const maxWidth = viewportRect.width * 0.95;
-                const maxHeight = viewportRect.height * 0.95;
+                // *** BUG WAS HERE ***
+                // We were trying to measure flipbookViewport while its parent was
+                // visibility: hidden, which returns 0 for width/height.
+                // const viewportRect = flipbookViewport.getBoundingClientRect();
+                // const maxWidth = viewportRect.width * 0.95;
+                // const maxHeight = viewportRect.height * 0.95;
+                
+                // *** FIX ***
+                // Revert to using the reliable window dimensions, like before.
+                const maxWidth = window.innerWidth * 0.9;
+                const maxHeight = window.innerHeight * 0.9;
                 
                 bookWidth = Math.min(1200, maxWidth);
                 bookHeight = (bookWidth / 2) * aspectRatio;
@@ -442,4 +451,5 @@
     </script>
 </body>
 </html>
+
 
