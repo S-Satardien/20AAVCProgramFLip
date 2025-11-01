@@ -63,6 +63,11 @@
             transition: transform 0.3s ease; /* Animate zoom */
         }
 
+        /* New: Change cursor to pointer when not zoomed */
+        #flipbook:not(.disabled) .page {
+            cursor: pointer;
+        }
+
         /* Styles for each page (canvas container) */
         #flipbook .page {
             background-color: white;
@@ -176,8 +181,8 @@
       3. PDF.js: The PDF rendering library
     -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <!-- Reverting to Turn.js v3 as you indicated it was working -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/turn.js/3/turn.min.js"></script>
-
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 
     <script>
@@ -399,6 +404,32 @@
 
         nextBtn.addEventListener('click', () => {
             $(flipbookEl).turn('next');
+        });
+
+        // *** NEW: Click to turn page ***
+        $(flipbookEl).on('click', function(event) {
+            // This 'disabled' class is added by turn.js when we call .turn('disable', true)
+            if ($(this).hasClass('disabled')) {
+                return; // Don't turn if zoomed in
+            }
+
+            // Get the width of the flipbook
+            const book = $(this);
+            const bookWidth = book.width();
+            
+            // Calculate where the click happened relative to the flipbook
+            // 'event.pageX' is the click position on the whole page
+            // 'book.offset().left' is the left edge of the flipbook on the page
+            const clickX = event.pageX - book.offset().left;
+
+            // If click is on the right half, go next
+            if (clickX > bookWidth / 2) {
+                book.turn('next');
+            } 
+            // If click is on the left half, go previous
+            else {
+                book.turn('previous');
+            }
         });
 
         window.addEventListener('keydown', (e) => {
