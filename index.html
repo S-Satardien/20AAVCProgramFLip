@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Flipbook Viewer</title>
+    <!-- Use Inter font from Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    
+    <style>
+        /* Basic styles for the page */
+        body, html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Inter', sans-serif;
+            background-color: #333; /* Dark background */
+            overflow: hidden; /* Hide scrollbars */
+        }
+
+        /* Loading indicator */
+        #loading {
+            font-size: 1.5rem;
+            color: white;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Container for the flipbook and controls */
+        #flipbook-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            visibility: hidden; /* Hide until ready */
+        }
+
+        /* The flipbook itself */
+        #flipbook {
+            /* Dimensions are set by JavaScript based on PDF size */
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        }
+
+        /* Styles for each page (canvas container) */
+        #flipbook .page {
+            background-color: white;
+            overflow: hidden;
+        }
+        
+        /* The canvas element where the PDF page is drawn */
+        #flipbook .page canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Turn.js adds this class to hard covers (first/last page) */
+        #flipbook .hard {
+            background-color: #f5f5f5; /* Slightly off-white for cover */
+            border: 1px solid #ccc;
+        }
+
+        /* Navigation controls */
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        #controls button {
+            background-color: #555;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            font-size: 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        #controls button:hover {
+            background-color: #777;
+        }
+
+        #controls button:disabled {
+            background-color: #444;
+            color: #888;
+            cursor: not-allowed;
+        }
+
+        #page-num {
+            color: white;
+            font-size: 1rem;
+            min-width: 80px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/turn.js/3/turn.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+
+
+    <!-- Loading message shown at the start -->
+    <div id="loading">
+        <p>Loading PDF...</p>
+        <p id="loading-progress"></p>
+    </div>
+
+    <!-- This container holds the flipbook and controls -->
+    <!-- It's hidden by default and shown by JavaScript when ready -->
+    <div id="flipbook-container">
+        <div id="flipbook">
+            <!-- Pages will be dynamically added here by JavaScript -->
+        </div>
+        <div id="controls">
+            <button id="prev-page" disabled>&laquo; Prev</button>
+            <span id="page-num"></span>
+            <button id="next-page">Next &raquo;</button>
+        </div>
+    </div>
+
+    <!-- 
+      JavaScript Libraries
+      1. jQuery: Required by Turn.js
+      2. Turn.js: The flipbook animation library
+      3. PDF.js: The PDF rendering library
+    -->
+   
+
+
+    <script>
+        // --- Configuration ---
+        // !!! IMPORTANT !!!
+        //
+        // I have reverted to the sample PDF because the link you provided
+        // ('https://health.uct.ac.za...') was blocked by a browser security
+        // feature called "CORS" (Cross-Origin Resource Sharing).
+        //
+        // The server at 'health.uct.ac.za' does not allow other websites
+        // (like this app) to download files from it. This is not a bug in our code,
+        // but a security restriction on their server.
+        //
+        // *** HOW TO FIX THIS FOR GITHUB PAGES ***
+        // 1. Upload your '20th-aavc-program.pdf' file to your GitHub Pages
+        //    repository, in the *same folder* as this 'flipbook.html' file.
+        // 2. Change the PDF_URL below to just the name of your file, like this:
+        //
+        //    const PDF_URL = '20th-aavc-program.pdf';
+        //
+        // This will work because both the HTML file and the PDF file
+        // will be on the same domain (your github.io address).
+        //
+        const PDF_URL = '20th-aavc-program.pdf';
+        
+        // --- End Configuration ---
+
+
+        // Set workerSrc for PDF.js
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+        // Get DOM elements
+        const loadingEl = document.getElementById('loading');
+        const loadingProgressEl = document.getElementById('loading-progress');
+        const containerEl = document.getElementById('flipbook-container');
+        const flipbookEl = document.getElementById('flipbook');
+        const prevBtn = document.getElementById('prev-page');
+        const nextBtn = document.getElementById('next-page');
+        const pageNumEl = document.getElementById('page-num');
+
+        let pdfDoc = null;
+        let totalPages = 0;
+        let bookWidth = 0;
+        let bookHeight = 0;
+
+        /**
+         * Asynchronously loads and renders the PDF document.
+         */
+        async function loadFlipbook() {
+            try {
+                // 1. Load the PDF document
+                loadingProgressEl.innerText = '(Fetching file...)';
+                // The { cache: "no-cache" } part helps avoid some common fetch issues
+                const pdf = await pdfjsLib.getDocument({
+                    url: PDF_URL,
+                    cache: "no-cache" 
+                }).promise;
+                pdfDoc = pdf;
+                totalPages = pdf.numPages;
+
+                // 2. Get the first page to determine aspect ratio
+                const firstPage = await pdf.getPage(1);
+                const viewport = firstPage.getViewport({ scale: 1 });
+                const aspectRatio = viewport.height / viewport.width;
+
+                // 3. Calculate responsive book dimensions
+                // We'll make the book 90% of the window width or 1200px, whichever is smaller
+                const maxWidth = window.innerWidth * 0.9;
+                const maxHeight = window.innerHeight * 0.9;
+                
+                bookWidth = Math.min(1200, maxWidth);
+                // Adjust height to not exceed viewport, maintaining aspect ratio
+                bookHeight = (bookWidth / 2) * aspectRatio;
+
+                if (bookHeight > maxHeight) {
+                    bookHeight = maxHeight;
+                    bookWidth = (bookHeight / aspectRatio) * 2;
+                }
+
+                const pageWidth = bookWidth / 2;
+                const pageHeight = bookHeight;
+
+                // Set flipbook element dimensions
+                flipbookEl.style.width = `${bookWidth}px`;
+                flipbookEl.style.height = `${bookHeight}px`;
+
+                // 4. Render all pages into canvas elements
+                // This is the "slow" part, but guarantees it works.
+                // For very large PDFs, "on-demand rendering" is better but more complex.
+                const renderPromises = [];
+
+                for (let i = 1; i <= totalPages; i++) {
+                    // Create a page element and canvas
+                    const pageElement = document.createElement('div');
+                    pageElement.classList.add('page');
+                    
+                    // Add hard covers for first and last page
+                    if (i === 1 || i === totalPages) {
+                        pageElement.classList.add('hard');
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    pageElement.appendChild(canvas);
+                    flipbookEl.appendChild(pageElement);
+
+                    // Start rendering the page
+                    renderPromises.push(renderPage(pdf, i, canvas, pageWidth, pageHeight));
+                }
+                
+                // Wait for all pages to be rendered
+                await Promise.all(renderPromises);
+
+                // 5. All pages are rendered, initialize Turn.js
+                $(flipbookEl).turn({
+                    width: bookWidth,
+                    height: bookHeight,
+                    elevation: 50,
+                    display: 'double', // Show two pages at once
+                    autoCenter: true,
+                    acceleration: true,
+                    pages: totalPages,
+                    // Gradients for the page-flip effect
+                    gradients: true,
+                    // Listen for page-turning events
+                    when: {
+                        turned: function(event, page, view) {
+                            updateControls(page, totalPages);
+                        }
+                    }
+                });
+
+                // 6. Show the flipbook and controls, hide loading
+                loadingEl.style.display = 'none';
+                containerEl.style.visibility = 'visible';
+                updateControls(1, totalPages); // Set initial state
+
+            } catch (error) {
+                console.error('Error loading PDF:', error);
+                // Provide a more helpful error message
+                if (error.message && (error.message.includes('Failed to fetch') || error.message.includes('network error'))) {
+                    loadingEl.innerHTML = '<p>Error loading PDF: "Failed to fetch"</p>' +
+                                          '<p style="font-size: 1rem; color: #ffcc80;">This is likely a CORS (Cross-Origin) error. The server hosting the PDF is blocking it.</p>' +
+                                          '<p style="font-size: 1rem;">Please see the comments in the code for instructions on how to fix this for GitHub Pages.</p>';
+                } else {
+                    loadingEl.innerText = 'Error loading PDF. Check console for details.';
+                }
+            }
+        }
+
+        /**
+         * Renders a single PDF page onto a canvas.
+         */
+        async function renderPage(pdf, pageNum, canvas, pageWidth, pageHeight) {
+            try {
+                loadingProgressEl.innerText = `(Rendering page ${pageNum} of ${totalPages}...)`;
+                
+                const page = await pdf.getPage(pageNum);
+                
+                // Calculate the scale to fit the page to our book size
+                const viewport = page.getViewport({ scale: 1 });
+                const scale = Math.min(pageWidth / viewport.width, pageHeight / viewport.height);
+                const scaledViewport = page.getViewport({ scale });
+
+                // Set canvas dimensions
+                const context = canvas.getContext('2d');
+                canvas.width = scaledViewport.width;
+                canvas.height = scaledViewport.height;
+
+                // Render the page
+                const renderContext = {
+                    canvasContext: context,
+                    viewport: scaledViewport
+                };
+                await page.render(renderContext).promise;
+
+            } catch (error) {
+                console.error(`Error rendering page ${pageNum}:`, error);
+            }
+        }
+
+        /**
+         * Updates the state of the navigation buttons and page number display.
+         */
+        function updateControls(page, total) {
+            // Update page number text
+            if (page === 1) {
+                pageNumEl.innerText = `Cover (1 of ${total})`;
+            } else if (page === total) {
+                pageNumEl.innerText = `Back (${total} of ${total})`;
+            } else if (page % 2 === 0) {
+                // Left page
+                pageNumEl.innerText = `Pages ${page} - ${page + 1} of ${total}`;
+            } else {
+                // Right page (when turning, it shows the new left page)
+                pageNumEl.innerText = `Pages ${page - 1} - ${page} of ${total}`;
+            }
+            
+            // Update button disabled state
+            prevBtn.disabled = (page <= 1);
+            nextBtn.disabled = (page >= total);
+        }
+
+        // --- Event Listeners ---
+
+        // Previous page button
+        prevBtn.addEventListener('click', () => {
+            $(flipbookEl).turn('previous');
+        });
+
+        // Next page button
+        nextBtn.addEventListener('click', () => {
+            $(flipbookEl).turn('next');
+        });
+
+        // Keyboard navigation
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') {
+                $(flipbookEl).turn('previous');
+            } else if (e.key === 'ArrowRight') {
+                $(flipbookEl).turn('next');
+            }
+        });
+
+        // Start the process
+        // loadFlipbook();
+        
+        // *** CHANGED THIS LINE ***
+        // Wait for all resources (including turn.js) to be fully loaded
+        // before trying to initialize the flipbook. This fixes the
+        // "$(...).turn is not a function" error.
+        window.addEventListener('load', loadFlipbook);
+
+    </script>
+</body>
+</html>
+
