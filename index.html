@@ -42,10 +42,25 @@
             visibility: hidden; /* Hide until ready */
         }
 
+        /* * New viewport wrapper for zoom.
+         * This allows us to have a scrollable area when zoomed in.
+        */
+        #flipbook-viewport {
+            flex-grow: 1; /* Take up available space */
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden; /* Will become 'auto' when zoomed */
+            margin-bottom: 15px; /* Space between book and controls */
+        }
+
         /* The flipbook itself */
         #flipbook {
             /* Dimensions are set by JavaScript based on PDF size */
             box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            transform-origin: center center;
+            transition: transform 0.3s ease; /* Animate zoom */
         }
 
         /* Styles for each page (canvas container) */
@@ -68,10 +83,14 @@
 
         /* Navigation controls */
         #controls {
-            margin-top: 20px;
+            /* margin-top: 20px; removed */
+            padding-bottom: 15px; /* Replaced margin-top */
             display: flex;
+            flex-wrap: wrap; /* Allow controls to wrap on small screens */
+            justify-content: center;
             align-items: center;
             gap: 15px;
+            flex-shrink: 0; /* Don't shrink the controls bar */
         }
 
         #controls button {
@@ -101,15 +120,18 @@
             font-size: 1rem;
             min-width: 80px;
             text-align: center;
+            user-select: none; /* Prevent text selection */
+        }
+
+        /* Simple divider for controls */
+        .control-divider {
+            width: 1px;
+            height: 25px;
+            background-color: #666;
         }
     </style>
 </head>
 <body>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/turn.js/3/turn.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
-
 
     <!-- Loading message shown at the start -->
     <div id="loading">
@@ -120,13 +142,30 @@
     <!-- This container holds the flipbook and controls -->
     <!-- It's hidden by default and shown by JavaScript when ready -->
     <div id="flipbook-container">
-        <div id="flipbook">
-            <!-- Pages will be dynamically added here by JavaScript -->
+        <!-- New Viewport Wrapper -->
+        <div id="flipbook-viewport">
+            <div id="flipbook">
+                <!-- Pages will be dynamically added here by JavaScript -->
+            </div>
         </div>
+        
         <div id="controls">
+            <!-- Page Navigation -->
             <button id="prev-page" disabled>&laquo; Prev</button>
             <span id="page-num"></span>
             <button id="next-page">Next &raquo;</button>
+            
+            <div class="control-divider"></div>
+
+            <!-- Zoom Controls -->
+            <button id="zoom-out" disabled>-</button>
+            <span>Zoom</span>
+            <button id="zoom-in">+</button>
+
+            <div class="control-divider"></div>
+
+            <!-- Fullscreen Control -->
+            <button id="fullscreen-btn">Fullscreen</button>
         </div>
     </div>
 
@@ -136,33 +175,16 @@
       2. Turn.js: The flipbook animation library
       3. PDF.js: The PDF rendering library
     -->
-   
-
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/turn.js@4.1.0/turn.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 
     <script>
         // --- Configuration ---
-        // !!! IMPORTANT !!!
-        //
-        // I have reverted to the sample PDF because the link you provided
-        // ('https://health.uct.ac.za...') was blocked by a browser security
-        // feature called "CORS" (Cross-Origin Resource Sharing).
-        //
-        // The server at 'health.uct.ac.za' does not allow other websites
-        // (like this app) to download files from it. This is not a bug in our code,
-        // but a security restriction on their server.
-        //
-        // *** HOW TO FIX THIS FOR GITHUB PAGES ***
-        // 1. Upload your '20th-aavc-program.pdf' file to your GitHub Pages
-        //    repository, in the *same folder* as this 'flipbook.html' file.
-        // 2. Change the PDF_URL below to just the name of your file, like this:
-        //
-        //    const PDF_URL = '20th-aavc-program.pdf';
-        //
-        // This will work because both the HTML file and the PDF file
-        // will be on the same domain (your github.io address).
-        //
         const PDF_URL = '20th-aavc-program.pdf';
-        
+        const MAX_ZOOM = 3;
+        const MIN_ZOOM = 1;
+        const ZOOM_STEP = 0.25;
         // --- End Configuration ---
 
 
@@ -173,26 +195,36 @@
         const loadingEl = document.getElementById('loading');
         const loadingProgressEl = document.getElementById('loading-progress');
         const containerEl = document.getElementById('flipbook-container');
+        const flipbookViewport = document.getElementById('flipbook-viewport');
         const flipbookEl = document.getElementById('flipbook');
+        
+        // Page nav controls
         const prevBtn = document.getElementById('prev-page');
         const nextBtn = document.getElementById('next-page');
         const pageNumEl = document.getElementById('page-num');
+
+        // Zoom controls
+        const zoomInBtn = document.getElementById('zoom-in');
+        const zoomOutBtn = document.getElementById('zoom-out');
+        
+        // Fullscreen control
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
 
         let pdfDoc = null;
         let totalPages = 0;
         let bookWidth = 0;
         let bookHeight = 0;
+        let zoomLevel = 1;
 
         /**
          * Asynchronously loads and renders the PDF document.
          */
-        async function loadFlipbook() {
+        async function loadFlipbook(url) {
             try {
                 // 1. Load the PDF document
                 loadingProgressEl.innerText = '(Fetching file...)';
-                // The { cache: "no-cache" } part helps avoid some common fetch issues
                 const pdf = await pdfjsLib.getDocument({
-                    url: PDF_URL,
+                    url: url,
                     cache: "no-cache" 
                 }).promise;
                 pdfDoc = pdf;
@@ -204,12 +236,12 @@
                 const aspectRatio = viewport.height / viewport.width;
 
                 // 3. Calculate responsive book dimensions
-                // We'll make the book 90% of the window width or 1200px, whichever is smaller
-                const maxWidth = window.innerWidth * 0.9;
-                const maxHeight = window.innerHeight * 0.9;
+                // Use viewport dimensions to calculate max size
+                const viewportRect = flipbookViewport.getBoundingClientRect();
+                const maxWidth = viewportRect.width * 0.95;
+                const maxHeight = viewportRect.height * 0.95;
                 
                 bookWidth = Math.min(1200, maxWidth);
-                // Adjust height to not exceed viewport, maintaining aspect ratio
                 bookHeight = (bookWidth / 2) * aspectRatio;
 
                 if (bookHeight > maxHeight) {
@@ -225,16 +257,12 @@
                 flipbookEl.style.height = `${bookHeight}px`;
 
                 // 4. Render all pages into canvas elements
-                // This is the "slow" part, but guarantees it works.
-                // For very large PDFs, "on-demand rendering" is better but more complex.
                 const renderPromises = [];
 
                 for (let i = 1; i <= totalPages; i++) {
-                    // Create a page element and canvas
                     const pageElement = document.createElement('div');
                     pageElement.classList.add('page');
                     
-                    // Add hard covers for first and last page
                     if (i === 1 || i === totalPages) {
                         pageElement.classList.add('hard');
                     }
@@ -243,11 +271,9 @@
                     pageElement.appendChild(canvas);
                     flipbookEl.appendChild(pageElement);
 
-                    // Start rendering the page
                     renderPromises.push(renderPage(pdf, i, canvas, pageWidth, pageHeight));
                 }
                 
-                // Wait for all pages to be rendered
                 await Promise.all(renderPromises);
 
                 // 5. All pages are rendered, initialize Turn.js
@@ -255,13 +281,11 @@
                     width: bookWidth,
                     height: bookHeight,
                     elevation: 50,
-                    display: 'double', // Show two pages at once
+                    display: 'double',
                     autoCenter: true,
                     acceleration: true,
                     pages: totalPages,
-                    // Gradients for the page-flip effect
                     gradients: true,
-                    // Listen for page-turning events
                     when: {
                         turned: function(event, page, view) {
                             updateControls(page, totalPages);
@@ -272,18 +296,13 @@
                 // 6. Show the flipbook and controls, hide loading
                 loadingEl.style.display = 'none';
                 containerEl.style.visibility = 'visible';
-                updateControls(1, totalPages); // Set initial state
+                updateControls(1, totalPages);
 
             } catch (error) {
                 console.error('Error loading PDF:', error);
-                // Provide a more helpful error message
-                if (error.message && (error.message.includes('Failed to fetch') || error.message.includes('network error'))) {
-                    loadingEl.innerHTML = '<p>Error loading PDF: "Failed to fetch"</p>' +
-                                          '<p style="font-size: 1rem; color: #ffcc80;">This is likely a CORS (Cross-Origin) error. The server hosting the PDF is blocking it.</p>' +
-                                          '<p style="font-size: 1rem;">Please see the comments in the code for instructions on how to fix this for GitHub Pages.</p>';
-                } else {
-                    loadingEl.innerText = 'Error loading PDF. Check console for details.';
-                }
+                loadingEl.innerHTML = '<p>Error loading PDF.</p>' +
+                                      '<p style="font-size: 1rem; color: #ffcc80;">Could not find the file at the specified URL.</p>' +
+                                      '<p style="font-size: 1rem;">Please check the `PDF_URL` variable in the code and make sure the file exists at that path.</p>';
             }
         }
 
@@ -296,17 +315,14 @@
                 
                 const page = await pdf.getPage(pageNum);
                 
-                // Calculate the scale to fit the page to our book size
                 const viewport = page.getViewport({ scale: 1 });
                 const scale = Math.min(pageWidth / viewport.width, pageHeight / viewport.height);
                 const scaledViewport = page.getViewport({ scale });
 
-                // Set canvas dimensions
                 const context = canvas.getContext('2d');
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
 
-                // Render the page
                 const renderContext = {
                     canvasContext: context,
                     viewport: scaledViewport
@@ -322,57 +338,108 @@
          * Updates the state of the navigation buttons and page number display.
          */
         function updateControls(page, total) {
-            // Update page number text
             if (page === 1) {
                 pageNumEl.innerText = `Cover (1 of ${total})`;
             } else if (page === total) {
                 pageNumEl.innerText = `Back (${total} of ${total})`;
             } else if (page % 2 === 0) {
-                // Left page
                 pageNumEl.innerText = `Pages ${page} - ${page + 1} of ${total}`;
             } else {
-                // Right page (when turning, it shows the new left page)
                 pageNumEl.innerText = `Pages ${page - 1} - ${page} of ${total}`;
             }
             
-            // Update button disabled state
             prevBtn.disabled = (page <= 1);
             nextBtn.disabled = (page >= total);
         }
 
-        // --- Event Listeners ---
+        /**
+         * Applies the current zoom level to the flipbook.
+         */
+        function updateZoom() {
+            flipbookEl.style.transform = `scale(${zoomLevel})`;
+            // Allow scrolling if zoomed in
+            flipbookViewport.style.overflow = zoomLevel > MIN_ZOOM ? 'auto' : 'hidden';
+            
+            // Disable page turning when zoomed in (to allow panning)
+            $(flipbookEl).turn('disable', zoomLevel > MIN_ZOOM);
 
-        // Previous page button
+            // Update button states
+            zoomOutBtn.disabled = zoomLevel <= MIN_ZOOM;
+            zoomInBtn.disabled = zoomLevel >= MAX_ZOOM;
+        }
+
+        /**
+         * Toggles the browser's fullscreen mode.
+         */
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+                fullscreenBtn.innerText = 'Exit Fullscreen';
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                    fullscreenBtn.innerText = 'Fullscreen';
+                }
+            }
+        }
+
+        // --- Event Listeners ---
         prevBtn.addEventListener('click', () => {
             $(flipbookEl).turn('previous');
         });
 
-        // Next page button
         nextBtn.addEventListener('click', () => {
             $(flipbookEl).turn('next');
         });
 
-        // Keyboard navigation
         window.addEventListener('keydown', (e) => {
-            if (e.key === 'ArrowLeft') {
-                $(flipbookEl).turn('previous');
-            } else if (e.key === 'ArrowRight') {
-                $(flipbookEl).turn('next');
+            if (zoomLevel === MIN_ZOOM) { // Only allow keyboard nav if not zoomed
+                if (e.key === 'ArrowLeft') {
+                    $(flipbookEl).turn('previous');
+                } else if (e.key === 'ArrowRight') {
+                    $(flipbookEl).turn('next');
+                }
             }
         });
 
-        // Start the process
-        // loadFlipbook();
-        
-        // *** CHANGED THIS LINE ***
-        // Wait for all resources (including turn.js) to be fully loaded
-        // before trying to initialize the flipbook. This fixes the
-        // "$(...).turn is not a function" error.
-        window.addEventListener('load', loadFlipbook);
+        // Zoom Listeners
+        zoomInBtn.addEventListener('click', () => {
+            zoomLevel = Math.min(MAX_ZOOM, zoomLevel + ZOOM_STEP);
+            updateZoom();
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            zoomLevel = Math.max(MIN_ZOOM, zoomLevel - ZOOM_STEP);
+            updateZoom();
+        });
+
+        // Fullscreen Listeners
+        fullscreenBtn.addEventListener('click', toggleFullScreen);
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement) {
+                fullscreenBtn.innerText = 'Fullscreen';
+            }
+        });
+
+        /**
+         * Robustly checks if turn.js is loaded and ready before starting.
+         */
+        function initializeApp() {
+            if ($.fn.turn) {
+                // turn.js is loaded and attached to jQuery
+                console.log('turn.js loaded. Initializing flipbook...');
+                loadFlipbook(PDF_URL); // Start by trying to load the user's provided PDF
+            } else {
+                // turn.js is not ready yet, check again in 100ms
+                console.log('Waiting for turn.js to load...');
+                setTimeout(initializeApp, 100);
+            }
+        }
+
+        // Start the initialization check once the window is fully loaded.
+        window.addEventListener('load', initializeApp);
 
     </script>
 </body>
 </html>
-
-
 
